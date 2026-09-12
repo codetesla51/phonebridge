@@ -8,6 +8,9 @@ PL=./phonebridge
 CONF=~/.config/phonebridge/config.ini
 PKG=dev.phonebridge.relay
 APK=assets/phonebridge.apk
+# release assets (preferred over building): gitlab verified, github mirror
+APK_URL_GL="https://gitlab.com/codetesla51/phonebridge/-/releases/v0.1.0/downloads/phonebridge.apk"
+APK_URL_GH="https://github.com/codetesla51/phonebridge/releases/download/v0.1.0/phonebridge.apk"
 
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'init: %s\n' "$*" >&2; exit 1; }
@@ -76,6 +79,12 @@ sed -i '/^alias_.*= *= *$/d' "$CONF"
 if adb -s "$dev" shell pm path "$PKG" 2>/dev/null | grep -q "package:"; then
     say "relay app already installed ($PKG)"
 else
+    if [ ! -f "$APK" ]; then
+        say "fetching prebuilt relay app…"
+        curl -fsSL -o "$APK" "$APK_URL_GL" 2>/dev/null \
+        || curl -fsSL -o "$APK" "$APK_URL_GH" 2>/dev/null \
+        || rm -f "$APK"
+    fi
     if [ -f "$APK" ]; then
         say "installing prebuilt relay app…"
     elif [ -d ~/Android/Sdk/build-tools ] && have javac; then

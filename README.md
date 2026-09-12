@@ -25,6 +25,12 @@ It is built in two halves so anyone can build their own interface on it:
 phonebridge --help # all commands
 ```
 
+The relay APK comes prebuilt — `init.sh` downloads it from the
+[v0.1.0 release](https://gitlab.com/codetesla51/phonebridge/-/releases/v0.1.0)
+([GitHub mirror](https://github.com/codetesla51/phonebridge/releases/tag/v0.1.0))
+and only builds from source if the download fails. Prefer building it
+yourself? `cd android-app && ./build.sh` (needs JDK 17 + Android SDK).
+
 `init.sh` is idempotent — re-run it whenever the phone's address changes.
 First-time Wi-Fi pairing needs one USB step (`adb tcpip 5555`), which it
 walks you through.
