@@ -1,5 +1,7 @@
 # phonebridge
 
+<img src="assets/logo.png" alt="PhoneBridge logo" width="160">
+
 PC to Android relay over adb: push files and clipboard text to the phone,
 pull files back, read battery, ring the phone, and watch notifications —
 from any UI. The backend is one stdlib-only Python file; the reference

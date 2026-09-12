@@ -13,8 +13,10 @@ javac --release 8 -classpath "$AJ" -d classes $(find src -name '*.java')
 echo "javac OK"
 "$BT/d8" --release --min-api 33 --lib "$AJ" --output out $(find classes -name '*.class')
 echo "d8 OK -> out/classes.dex"
+"$BT/aapt2" compile --dir res -o out/compiled-res.zip
+echo "aapt2 compile OK"
 "$BT/aapt2" link -o out/base.unsigned.apk --manifest AndroidManifest.xml -I "$AJ" \
-  --min-sdk-version 33 --target-sdk-version 34 --version-code 1 --version-name 1.0
+  out/compiled-res.zip --min-sdk-version 33 --target-sdk-version 34 --version-code 1 --version-name 1.0
 echo "aapt2 link OK"
 
 # append classes.dex at apk root (python zipfile; no `zip` binary on box)
