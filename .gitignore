@@ -1,0 +1,4 @@
+android-app/out/
+android-app/classes/
+__pycache__/
+*.pyc

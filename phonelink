@@ -1,0 +1,503 @@
+#!/usr/bin/env python3
+"""phonelink — backend daemon/CLI for PC<->Android file + clipboard relay.
+
+Every phone interaction here is plain adb + shell; no desktop toolkit
+required. Any UI (quickshell, waybar, rofi, a shell script) can build on
+top of these subcommands.
+
+Subcommands (all print JSON to stdout; errors go to stderr, exit != 0):
+  devices                      list attached devices [{id, name}]
+  connect [addr]               adb connect (defaults to remembered target)
+  battery                      {level, charging}
+  clip --text T | --file F     set the phone clipboard via the relay app
+  push <local> [remote-dir]    push a file + trigger the media scanner
+  pull <name> [--dir D] [--dest DIR]
+  ls [remote-dir]              [{name, isDir}]
+  shot [--dest DIR]            screencap -> PNG, prints path
+  ring                         wake + max volume + vibrate burst
+  wake                         screen wake only
+  inbox-sync [--dest DIR]      pull new share-sheet files -> dest
+  inbox-watch [--interval N]   inbox-sync loop, one JSON line per arrival
+  notifs                       one-shot notification records
+  notifs-watch [--interval N]  new notification records as JSON lines
+
+Config: ~/.config/phonelink/config.ini (written by init.sh).
+  [phone]  device, remote_dir, inbox_dir, downloads
+  [display] alias_<n> = <model substring> = <label>   (friendly names)
+  [notify] app_<n> = <pkg substring> = <label>        (watch allowlist)
+
+Verified against itel A663LC / Android 13. Known ROM quirks (see README):
+clipboard reads are blocked, relay-set clips are reaped within seconds
+(paste immediately), share-sheet inbox is the robust phone->PC channel.
+"""
+
+import configparser
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+
+APP_PKG = "dev.phonelink.relay"
+CONFIG = os.path.expanduser("~/.config/phonelink/config.ini")
+INBOX_DIR = "/sdcard/Download/PhoneLinkInbox"
+CLIP_MAX = 100000
+INBOX_MAX = 250 * 1024 * 1024
+
+
+def q(s):
+    return shlex.quote(str(s))
+
+
+def load_config():
+    c = configparser.ConfigParser()
+    c.read(CONFIG)
+    return c
+
+
+def cfg_get(c, section, key, default=""):
+    try:
+        return c.get(section, key, fallback=default)
+    except Exception:
+        return default
+
+
+def aliases(c):
+    out = []
+    if c.has_section("display"):
+        for _, v in c.items("display"):
+            if "=" in v:
+                sub, _, label = v.partition("=")
+                out.append((sub.strip(), label.strip()))
+    return out
+
+
+def notify_apps(c):
+    out = []
+    if c.has_section("notify"):
+        for _, v in c.items("notify"):
+            if "=" in v:
+                sub, _, label = v.partition("=")
+                out.append((sub.strip(), label.strip()))
+    return out
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def adb(device, *args):
+    cmd = ["adb"]
+    if device:
+        cmd += ["-s", device]
+    cmd += list(args)
+    return run(cmd)
+
+
+def resolve_device(c, explicit=""):
+    if explicit:
+        return explicit
+    dev = cfg_get(c, "phone", "device")
+    if dev:
+        return dev
+    r = run(["adb", "devices"])
+    for line in r.stdout.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "device":
+            return parts[0]
+    return ""
+
+
+def emit(obj):
+    print(json.dumps(obj))
+
+
+def fail(msg, code=1):
+    print(f"phonelink: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+# ── devices ──────────────────────────────────────────────────────────────
+def cmd_devices(c, _args):
+    r = run(["adb", "devices", "-l"])
+    found = []
+    als = aliases(c)
+    for line in r.stdout.strip().split("\n"):
+        m = __import__("re").match(r"^(\S+)\s+device\b", line)
+        if not m:
+            continue
+        mod = __import__("re").search(r"\bmodel:(\S+)", line)
+        name = mod.group(1).replace("_", " ") if mod else "Phone"
+        for sub, label in als:
+            if sub.lower() in name.lower():
+                name = label
+                break
+        found.append({"id": m.group(1), "name": name})
+    emit(found)
+
+
+def cmd_connect(c, args):
+    addr = args[0] if args else cfg_get(c, "phone", "target")
+    if not addr:
+        fail("no address: pass one or set phone.target in " + CONFIG, 2)
+    r = run(["adb", "connect", addr])
+    out = r.stdout + r.stderr
+    if "connected to" in out or "already connected" in out:
+        emit({"status": "ok", "target": addr})
+    else:
+        fail("phone not answering: " + out.strip()[:120])
+
+
+# ── battery ──────────────────────────────────────────────────────────────
+def cmd_battery(c, args):
+    dev = resolve_device(c, args[0] if args else "")
+    if not dev:
+        fail("no device")
+    r = adb(dev, "shell", "dumpsys", "battery")
+    lv = __import__("re").search(r"level:\s*(\d+)", r.stdout)
+    st = __import__("re").search(r"status:\s*(\d+)", r.stdout)
+    emit({"level": int(lv.group(1)) if lv else -1,
+          "charging": (st.group(1) == "2") if st else False})
+
+
+# ── clipboard push (PC -> phone) ─────────────────────────────────────────
+def cmd_clip(c, args):
+    import argparse
+    p = argparse.ArgumentParser(prog="phonelink clip")
+    p.add_argument("--text", default=None)
+    p.add_argument("--file", default=None)
+    ns = p.parse_args(args)
+    dev = resolve_device(c)
+    if not dev:
+        fail("no device")
+    clip_file = os.path.expanduser("~/.cache/phonelink-clipboard.txt")
+    if ns.text is not None:
+        data = ns.text.encode()
+    elif ns.file:
+        with open(os.path.expanduser(ns.file), "rb") as f:
+            data = f.read()
+    else:
+        data = sys.stdin.buffer.read()
+    if len(data) == 0:
+        emit({"status": "empty"})
+        return
+    if len(data) > CLIP_MAX:
+        emit({"status": "toolong", "bytes": len(data)})
+        return
+    with open(clip_file, "wb") as f:
+        f.write(data)
+    rdir = f"/sdcard/Android/data/{APP_PKG}/files"
+    ok = (
+        adb(dev, "push", clip_file, f"{rdir}/in.txt").returncode == 0
+        and adb(dev, "shell", "am", "start", "-n",
+                f"{APP_PKG}/.PhoneRelayActivity",
+                "--es", "mode", "write",
+                "--es", "textfile", f"{rdir}/in.txt").returncode == 0
+    )
+    if not ok:
+        emit({"status": "fail"})
+        return
+    time.sleep(1.5)
+    ack = adb(dev, "shell", "cat", f"{rdir}/ack.txt").stdout
+    if "OK" in ack:
+        emit({"status": "ok"})
+    else:
+        emit({"status": "fail"})
+        sys.exit(1)
+
+
+# ── push / pull / ls / shot / scan ───────────────────────────────────────
+def cmd_push(c, args):
+    if not args:
+        fail("usage: phonelink push <local-file> [remote-dir]", 2)
+    dev = resolve_device(c)
+    if not dev:
+        fail("no device")
+    local = os.path.expanduser(args[0])
+    rdir = args[1] if len(args) > 1 else cfg_get(c, "phone", "remote_dir", "/sdcard/Download")
+    r = adb(dev, "push", local, rdir)
+    if r.returncode != 0:
+        fail((r.stderr.strip().split("\n") or ["push failed"])[-1][:120])
+    name = os.path.basename(local)
+    uri = "file://" + rdir + "/" + name
+    adb(dev, "shell", "am", "broadcast",
+        "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", uri)
+    emit({"status": "ok", "name": name, "remote": rdir + "/" + name})
+
+
+def cmd_pull(c, args):
+    import argparse
+    p = argparse.ArgumentParser(prog="phonelink pull")
+    p.add_argument("name")
+    p.add_argument("--dir", default=None)
+    p.add_argument("--dest", default=None)
+    ns = p.parse_args(args)
+    dev = resolve_device(c)
+    if not dev:
+        fail("no device")
+    rdir = ns.dir or cfg_get(c, "phone", "remote_dir", "/sdcard/Download")
+    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/Downloads"))
+    os.makedirs(dest, exist_ok=True)
+    r = adb(dev, "pull", f"{rdir}/{ns.name}", dest + "/")
+    if r.returncode != 0 or "1 file pulled" not in (r.stdout + r.stderr):
+        fail((r.stderr.strip().split("\n") or ["pull failed"])[-1][:120])
+    emit({"status": "ok", "name": ns.name, "path": dest + "/" + ns.name})
+
+
+def cmd_ls(c, args):
+    dev = resolve_device(c)
+    if not dev:
+        fail("no device")
+    rdir = args[0] if args else cfg_get(c, "phone", "remote_dir", "/sdcard/Download")
+    r = adb(dev, "shell", "ls", "-p", rdir)
+    rows = []
+    for line in r.stdout.strip().split("\n"):
+        n = line.strip()
+        if not n:
+            continue
+        rows.append({"name": n.rstrip("/"), "isDir": n.endswith("/")})
+    rows.sort(key=lambda e: (not e["isDir"], e["name"].lower()))
+    emit(rows)
+
+
+def cmd_shot(c, args):
+    import argparse
+    p = argparse.ArgumentParser(prog="phonelink shot")
+    p.add_argument("--dest", default=None)
+    ns = p.parse_args(args)
+    dev = resolve_device(c)
+    if not dev:
+        fail("no device")
+    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "shots", "~/Pictures/PhoneLink"))
+    os.makedirs(dest, exist_ok=True)
+    name = "phonelink-" + time.strftime("%Y%m%d-%H%M%S") + ".png"
+    path = dest + "/" + name
+    with open(path, "wb") as f:
+        r = subprocess.run(["adb", "-s", dev, "exec-out", "screencap", "-p"],
+                           stdout=f, stderr=subprocess.PIPE)
+    if r.returncode != 0 or os.path.getsize(path) == 0:
+        fail("shot failed — screen on and unlocked?")
+    emit({"status": "ok", "name": name, "path": path})
+
+
+# ── ring / wake ──────────────────────────────────────────────────────────
+def cmd_ring(c, args):
+    dev = resolve_device(c, args[0] if args else "")
+    if not dev:
+        fail("no device")
+    adb(dev, "shell", "input", "keyevent", "224")  # wake
+    adb(dev, "shell", "cmd", "media_session", "volume", "--stream", "3", "--set", "15")
+    adb(dev, "shell", "am", "start", "-a", "android.intent.action.VIEW",
+        "-d", "content://settings/system/ringtone")
+    for _ in range(3):
+        adb(dev, "shell", "cmd", "vibrator_manager", "synced",
+            "-f", "oneshot", "400", "255")
+        time.sleep(0.35)
+    emit({"status": "ok"})
+
+
+def cmd_wake(c, args):
+    dev = resolve_device(c, args[0] if args else "")
+    if not dev:
+        fail("no device")
+    adb(dev, "shell", "input", "keyevent", "224")
+    emit({"status": "ok"})
+
+
+# ── inbox: share-sheet files phone -> PC ─────────────────────────────────
+def inbox_list(dev):
+    """[(size, name)] for files in the share-sheet inbox dir."""
+    r = adb(dev, "shell",
+            "for f in " + INBOX_DIR + "/*; do [ -f \"$f\" ] || continue; "
+            "n=${f##*/}; "
+            "printf \"%s\\t%s\\n\" \"$(stat -c %s \"$f\")\" \"$n\"; done")
+    out = []
+    for line in r.stdout.split("\n"):
+        if "\t" not in line:
+            continue
+        size, _, name = line.partition("\t")
+        name = name.strip()
+        if not name or not size.strip().isdigit():
+            continue
+        out.append((int(size.strip()), name))
+    return out
+
+
+def cmd_inbox_sync(c, args):
+    import argparse
+    p = argparse.ArgumentParser(prog="phonelink inbox-sync")
+    p.add_argument("--dest", default=None)
+    ns = p.parse_args(args)
+    dev = resolve_device(c)
+    if not dev:
+        fail("no device")
+    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/Downloads"))
+    os.makedirs(dest, exist_ok=True)
+    pulled, skipped = [], []
+    for size, name in inbox_list(dev):
+        if size > INBOX_MAX:
+            skipped.append({"name": name, "reason": "too-big", "bytes": size})
+            continue
+        local = dest + "/" + name
+        if os.path.isfile(local) and os.path.getsize(local) == size:
+            skipped.append({"name": name, "reason": "already-here"})
+            continue
+        r = adb(dev, "pull", f"{INBOX_DIR}/{name}", dest + "/")
+        if r.returncode == 0 and "1 file pulled" in (r.stdout + r.stderr):
+            pulled.append({"name": name, "path": local, "bytes": size})
+        else:
+            skipped.append({"name": name, "reason": "pull-failed"})
+    emit({"pulled": pulled, "skipped": skipped})
+
+
+def cmd_inbox_watch(c, args):
+    import argparse
+    p = argparse.ArgumentParser(prog="phonelink inbox-watch")
+    p.add_argument("--interval", type=int, default=5)
+    p.add_argument("--dest", default=None)
+    ns = p.parse_args(args)
+    dev = resolve_device(c)
+    if not dev:
+        fail("no device")
+    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/Downloads"))
+    os.makedirs(dest, exist_ok=True)
+    try:
+        while True:
+            for size, name in inbox_list(dev):
+                if size > INBOX_MAX:
+                    continue
+                local = dest + "/" + name
+                if os.path.isfile(local) and os.path.getsize(local) == size:
+                    continue
+                r = adb(dev, "pull", f"{INBOX_DIR}/{name}", dest + "/")
+                if r.returncode == 0 and "1 file pulled" in (r.stdout + r.stderr):
+                    emit({"event": "inbox", "name": name, "path": local, "bytes": size})
+                    sys.stdout.flush()
+            time.sleep(ns.interval)
+    except KeyboardInterrupt:
+        pass
+
+
+# ── notifications ────────────────────────────────────────────────────────
+def parse_notifs(dump, allow):
+    import re
+    fresh, cur = [], None
+
+    def flush():
+        if cur and cur.get("key"):
+            fresh.append(cur)
+
+    for line in dump.split("\n"):
+        h = re.search(r"NotificationRecord\([^:]*: pkg=([^\s]+)", line)
+        if h:
+            if cur is not None:
+                flush()
+            cur = None
+            for sub, label in allow:
+                if sub in h.group(1):
+                    m = re.search(r"key=([^:\s]+)", line)
+                    cur = {"key": m.group(1) if m else None, "title": "",
+                           "label": label, "pkg": h.group(1), "sender": ""}
+                    break
+            continue
+        if not cur:
+            continue
+        if not cur["key"]:
+            m = re.search(r"key=([^:\s]+)", line)
+            if m:
+                cur["key"] = m.group(1)
+        if not cur["title"]:
+            t = re.search(r"android\.title=String \(([^)]*)\)", line)
+            if t:
+                cur["title"] = t.group(1)
+    if cur is not None:
+        flush()
+    # WhatsApp embeds the author in group-chat titles:
+    # "Group (149 messages): ~ Jay"; 1:1 titles are the contact themselves
+    for rec in fresh:
+        if rec["label"] == "WhatsApp" and rec["title"]:
+            sm = re.search(r"[:：]\s*~?\s*(.+)$", rec["title"])
+            if sm:
+                tail = sm.group(1).strip().rstrip(")").strip()
+                if tail and not tail[0].isdigit() and len(tail) <= 30:
+                    rec["sender"] = tail
+    return fresh
+
+
+def notif_dump(dev):
+    r = adb(dev, "shell", "dumpsys notification --noredact | "
+            "sed 's/ Notification(.*//' | "
+            "grep -E 'NotificationRecord\\(|key=|android.title'")
+    return r.stdout
+
+
+def cmd_notifs(c, _args):
+    dev = resolve_device(c)
+    if not dev:
+        fail("no device")
+    emit(parse_notifs(notif_dump(dev), notify_apps(c)))
+
+
+def cmd_notifs_watch(c, args):
+    import argparse
+    p = argparse.ArgumentParser(prog="phonelink notifs-watch")
+    p.add_argument("--interval", type=int, default=4)
+    ns = p.parse_args(args)
+    dev = resolve_device(c)
+    if not dev:
+        fail("no device")
+    allow = notify_apps(c)
+    seen, primed = [], False
+    try:
+        while True:
+            for rec in parse_notifs(notif_dump(dev), allow):
+                if not primed:
+                    seen.append(rec["key"])
+                    continue
+                if rec["key"] in seen:
+                    continue
+                seen.append(rec["key"])
+                if len(seen) > 200:
+                    seen.pop(0)
+                rec["event"] = "notification"
+                emit(rec)
+                sys.stdout.flush()
+            primed = True
+            time.sleep(ns.interval)
+    except KeyboardInterrupt:
+        pass
+
+
+COMMANDS = {
+    "devices": cmd_devices,
+    "connect": cmd_connect,
+    "battery": cmd_battery,
+    "clip": cmd_clip,
+    "push": cmd_push,
+    "pull": cmd_pull,
+    "ls": cmd_ls,
+    "shot": cmd_shot,
+    "ring": cmd_ring,
+    "wake": cmd_wake,
+    "inbox-sync": cmd_inbox_sync,
+    "inbox-watch": cmd_inbox_watch,
+    "notifs": cmd_notifs,
+    "notifs-watch": cmd_notifs_watch,
+}
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        print("\ncommands: " + ", ".join(sorted(COMMANDS)))
+        sys.exit(0 if len(sys.argv) > 1 else 2)
+    cmd = sys.argv[1]
+    if cmd not in COMMANDS:
+        fail(f"unknown command '{cmd}' (try: phonelink --help)", 2)
+    c = load_config()
+    COMMANDS[cmd](c, sys.argv[2:])
+
+
+if __name__ == "__main__":
+    main()
