@@ -35,6 +35,7 @@ import configparser
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -478,6 +479,97 @@ def cmd_notifs_watch(c, args):
         pass
 
 
+def cmd_probe(c, args):
+    import argparse
+    p = argparse.ArgumentParser(prog="phonebridge probe")
+    p.add_argument("--json", action="store_true")
+    ns = p.parse_args(args)
+    checks = []
+
+    def check(name, ok, note=""):
+        checks.append({"name": name, "ok": bool(ok), "note": note})
+
+    if not shutil.which("adb"):
+        check("adb", False, "android-tools not installed")
+        return finish_probe(checks, ns)
+    check("adb", True)
+    dev = resolve_device(c)
+    if not dev:
+        check("device", False, "no device: run init.sh (cable once for tcpip 5555)")
+        return finish_probe(checks, ns)
+    check("device", True, dev)
+    if adb(dev, "shell", "echo ok").stdout.strip() != "ok":
+        check("shell", False, "adb shell not answering")
+        return finish_probe(checks, ns)
+    check("shell", True)
+    # relay app installed?
+    pm = adb(dev, "shell", "pm", "path", APP_PKG).stdout
+    if "package:" not in pm:
+        check("relay-app", False, f"{APP_PKG} not installed: run init.sh")
+        return finish_probe(checks, ns)
+    check("relay-app", True, APP_PKG)
+    # all-files access (share-sheet inbox writes need it)
+    ops = adb(dev, "shell", "appops", "get", APP_PKG,
+              "MANAGE_EXTERNAL_STORAGE").stdout
+    check("all-files-access", ": allow" in ops,
+          "" if ": allow" in ops else "Settings > Special app access > All files access")
+    # inbox writable?
+    inbox = inbox_dir(c)
+    probe_file = inbox.rstrip("/") + "/.probe"
+    w = adb(dev, "shell", f"touch {q(probe_file)} && rm {q(probe_file)} && echo ok")
+    check("inbox-writable", w.stdout.strip() == "ok", inbox)
+    # share-sheet targets registered? (query with text/plain: this ROM's
+    # resolver answers nothing for */* queries even when filters match)
+    reg = adb(dev, "shell", "cmd", "package", "query-activities", "--brief",
+              "-a", "android.intent.action.SEND", "-t", "text/plain").stdout
+    reg_m = adb(dev, "shell", "cmd", "package", "query-activities", "--brief",
+                "-a", "android.intent.action.SEND_MULTIPLE", "-t", "text/plain").stdout
+    check("share-sheet", APP_PKG in reg and APP_PKG in reg_m,
+          "SEND + SEND_MULTIPLE" if APP_PKG in reg and APP_PKG in reg_m else "reinstall the APK")
+    # notification dump readable (watcher prerequisite)?
+    nd = adb(dev, "shell", "dumpsys notification --noredact | head -c 64").stdout
+    nd_ok = len(nd.strip()) > 0
+    check("notif-dump", nd_ok, "" if nd_ok else "dumpsys notification blocked?")
+    # clipboard push end to end (sets + acks)?
+    rdir = f"/sdcard/Android/data/{APP_PKG}/files"
+    clip_ok = do_clip_probe(dev, rdir)
+    check("clipboard-push", clip_ok, "paste-now only on strict ROMs (see README quirks)")
+    return finish_probe(checks, ns)
+
+
+def do_clip_probe(dev, rdir):
+    import tempfile
+    with tempfile.NamedTemporaryFile("wb", suffix=".txt", delete=False) as f:
+        f.write(b"phonebridge-probe")
+        tmp = f.name
+    try:
+        if adb(dev, "push", tmp, f"{rdir}/in.txt").returncode != 0:
+            return False
+        if adb(dev, "shell", "am", "start", "-n",
+               f"{APP_PKG}/.PhoneBridgeActivity",
+               "--es", "mode", "write",
+               "--es", "textfile", f"{rdir}/in.txt").returncode != 0:
+            return False
+        time.sleep(1.5)
+        return "OK" in adb(dev, "shell", "cat", f"{rdir}/ack.txt").stdout
+    finally:
+        os.unlink(tmp)
+
+
+def finish_probe(checks, ns):
+    ok = all(x["ok"] for x in checks)
+    if ns.json:
+        emit({"ok": ok, "checks": checks})
+    else:
+        for x in checks:
+            mark = "PASS" if x["ok"] else "FAIL"
+            line = f"[{mark}] {x['name']}"
+            if x["note"]:
+                line += f" — {x['note']}"
+            print(line)
+    sys.exit(0 if ok else 1)
+
+
 COMMANDS = {
     "devices": cmd_devices,
     "connect": cmd_connect,
@@ -493,7 +585,9 @@ COMMANDS = {
     "inbox-watch": cmd_inbox_watch,
     "notifs": cmd_notifs,
     "notifs-watch": cmd_notifs_watch,
+    "probe": cmd_probe,
 }
+
 
 
 def main():

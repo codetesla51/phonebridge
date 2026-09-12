@@ -49,10 +49,29 @@ All commands print JSON to stdout. Errors go to stderr with a nonzero exit.
 | `inbox-watch [--interval N]` | `inbox-sync` loop, one JSON object per arrival |
 | `notifs` | current notification records `[{key, label, title, sender, pkg}]` |
 | `notifs-watch [--interval N]` | new records as JSON lines (first scan is absorbed, not emitted) |
+| `probe [--json]` | phone compatibility checklist (adb, app, storage, inbox, share, notifs, clip) — exit 0 iff all pass |
 
-Config lives at `~/.config/phonebridge/config.ini`: remembered device,
-directories, `[display]` model-substring aliases, and the `[notify]`
-pkg-substring allowlist for the notification watcher.
+Config lives at `~/.config/phonebridge/config.ini` (written by init.sh).
+
+```ini
+[phone]
+device = 192.168.58.159:5555   # adb id (serial or host:port)
+target = 192.168.58.159:5555   # remembered address for `connect`
+remote_dir = /sdcard/Download  # browser root + push destination
+inbox_dir = /sdcard/PhoneBridge# share-sheet inbox (relay app writes here)
+downloads = ~/PhoneBridge      # pull + inbox-sync destination
+shots = ~/Pictures/PhoneBridge # `shot` destination
+
+[display]
+alias_1 = itel = Uthman         # model substring = friendly name (alias_2…)
+
+[notify]
+app_1 = com.whatsapp = WhatsApp # package substring = label (app_2…)
+```
+
+`~` expands in paths. `probe` verifies the phone-side prerequisites
+(app installed, storage grant, inbox writable, share targets)
+independently of these values.
 
 ## Protocol for UI builders
 
