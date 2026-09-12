@@ -2,11 +2,21 @@
 
 <img src="assets/logo.png" alt="PhoneBridge logo" width="160">
 
-PC to Android relay over adb: push files and clipboard text to the phone,
-pull files back, read battery, ring the phone, and watch notifications —
-from any UI. The backend is one stdlib-only Python file; the reference
-client is a quickshell module, but anything that can run a subprocess can
-build on top.
+PhoneBridge is a PC to Android bridge over adb: push files and clipboard
+text to the phone, pull files back, read battery, ring a lost phone, and
+forward its notifications to the desktop — with no account, no cloud, no
+cable after the one-time Wi-Fi setup, and no app you ever have to open.
+It is built in two halves so anyone can build their own interface on it:
+
+- **Backend** (`phonebridge`, one stdlib-only Python file) — every phone
+  operation as a small command that prints JSON. Scripts, bars, launchers,
+  and full UIs all talk to the same CLI.
+- **Relay app** (`android-app/`, ~200 lines, no Gradle) — an invisible
+  flash target that sets the phone clipboard, plus a share-sheet target so
+  anything shared from any phone app lands in `/sdcard/PhoneBridge/` for
+  automatic pickup.
+- **Reference client** (`clients/quickshell/`) — the author's own
+  quickshell popup, kept thin on purpose so the backend stays honest.
 
 ## Quickstart
 
