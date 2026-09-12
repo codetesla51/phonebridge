@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 PL=./phonebridge
 CONF=~/.config/phonebridge/config.ini
 PKG=dev.phonebridge.relay
-APK=android-app/out/phonerelay.apk
+APK=assets/phonebridge.apk
 
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'init: %s\n' "$*" >&2; exit 1; }

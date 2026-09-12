@@ -44,17 +44,23 @@ public class ShareRelayActivity extends Activity {
         if (!INBOX.isDirectory() && !INBOX.mkdirs())
             throw new java.io.IOException("cannot create " + INBOX);
         ContentResolver cr = getContentResolver();
-        Uri stream = i.getParcelableExtra(Intent.EXTRA_STREAM);
         String ts = String.valueOf(System.currentTimeMillis());
+        // multi-select shares carry a stream list; singles carry one stream
+        java.util.ArrayList<Uri> streams = i.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+        if (streams != null && streams.size() > 0) {
+            int k = 0;
+            for (Uri stream : streams) {
+                if (stream == null) continue;
+                saveStream(cr, stream, "phonebridge-" + ts + "-" + (k++) + "-" + fileNameOf(cr, stream),
+                        i.getType() != null ? i.getType() : "*/*");
+            }
+            Toast.makeText(this, k + " saved to PhoneBridge/", Toast.LENGTH_LONG).show();
+            return;
+        }
+        Uri stream = i.getParcelableExtra(Intent.EXTRA_STREAM);
         if (stream != null) {
             String name = "phonebridge-" + ts + "-" + fileNameOf(cr, stream);
-            try (InputStream in = cr.openInputStream(stream);
-                 OutputStream os = new FileOutputStream(new File(INBOX, name))) {
-                byte[] buf = new byte[65536];
-                int n;
-                while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
-            }
-            Log.d(TAG, "file share landed: " + name);
+            saveStream(cr, stream, name, i.getType() != null ? i.getType() : "*/*");
             Toast.makeText(this, "Saved to PhoneBridge/", Toast.LENGTH_LONG).show();
         } else {
             String subj = i.getStringExtra(Intent.EXTRA_SUBJECT);
@@ -70,6 +76,16 @@ public class ShareRelayActivity extends Activity {
             Log.d(TAG, "text share landed: " + body.length() + " chars");
             Toast.makeText(this, "Saved to PhoneBridge/", Toast.LENGTH_LONG).show();
         }
+    }
+
+    private void saveStream(ContentResolver cr, Uri stream, String name, String mime) throws Exception {
+        try (InputStream in = cr.openInputStream(stream);
+             OutputStream os = new FileOutputStream(new File(INBOX, name))) {
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+        }
+        Log.d(TAG, "file share landed: " + name);
     }
 
     private static String fileNameOf(ContentResolver cr, Uri uri) {
