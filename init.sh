@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# phonelink init — dependencies, pairing, config, relay APK, smoke test.
+# phonebridge init — dependencies, pairing, config, relay APK, smoke test.
 # Idempotent: safe to re-run any time.
 set -u
 cd "$(dirname "$0")"
 
-PL=./phonelink
-CONF=~/.config/phonelink/config.ini
-PKG=dev.phonelink.relay
+PL=./phonebridge
+CONF=~/.config/phonebridge/config.ini
+PKG=dev.phonebridge.relay
 APK=android-app/out/phonerelay.apk
 
 say()  { printf '%s\n' "$*"; }
@@ -36,7 +36,7 @@ fi
 dev="$target"
 
 # ── config ──────────────────────────────────────────────────────────────
-mkdir -p ~/.config/phonelink
+mkdir -p ~/.config/phonebridge
 if [ ! -f "$CONF" ]; then
     printf 'friendly name for this device (blank = use model name): '
     read -r alias
@@ -45,9 +45,9 @@ if [ ! -f "$CONF" ]; then
         echo "device = $dev"
         echo "target = $target"
         echo "remote_dir = /sdcard/Download"
-        echo "inbox_dir = /sdcard/PhoneLink"
-        echo "downloads = ~/Downloads"
-        echo "shots = ~/Pictures/PhoneLink"
+        echo "inbox_dir = /sdcard/PhoneBridge"
+        echo "downloads = ~/PhoneBridge"
+        echo "shots = ~/Pictures/PhoneBridge"
         echo ""
         echo "[display]"
         [ -n "${alias:-}" ] && echo "alias_1 = = $alias"
@@ -88,9 +88,9 @@ else
     say "relay app installed"
     sleep 3  # fresh installs need a beat before the first flash answers
 fi
-# share-sheet inbox (/sdcard/PhoneLink) needs all-files access; needs the
+# share-sheet inbox (/sdcard/PhoneBridge) needs all-files access; needs the
 # permission declared (it is) — if the ROM refuses the adb grant, flip it
-# once in Settings > Special app access > All files access > PhoneRelay
+# once in Settings > Special app access > All files access > PhoneBridge
 if ! adb -s "$dev" shell appops get "$PKG" MANAGE_EXTERNAL_STORAGE 2>/dev/null | grep -q ": allow"; then
     adb -s "$dev" shell appops set "$PKG" MANAGE_EXTERNAL_STORAGE allow >/dev/null 2>&1
 fi
@@ -98,18 +98,18 @@ if adb -s "$dev" shell appops get "$PKG" MANAGE_EXTERNAL_STORAGE 2>/dev/null | g
     say "all-files access: granted"
 else
     say "all-files access: NOT granted — sharing will fail until you allow it:"
-    say "  Settings > Special app access > All files access > PhoneRelay > Allow"
+    say "  Settings > Special app access > All files access > PhoneBridge > Allow"
 fi
 
 # ── smoke test ──────────────────────────────────────────────────────────
 say "--- smoke test ---"
 "$PL" devices
 "$PL" battery
-if "$PL" clip --text "phonelink setup OK — paste me fast" >/dev/null; then
+if "$PL" clip --text "phonebridge setup OK — paste me fast" >/dev/null; then
     say "clipboard push: OK (check the phone — paste immediately, this ROM reaps clips fast)"
 else
     say "clipboard push: FAILED (share-sheet path still works; see README quirks)"
 fi
 say "---"
-say "done. Add $(pwd) to PATH, then: phonelink --help"
+say "done. Add $(pwd) to PATH, then: phonebridge --help"
 say "Build a UI on top: README 'Protocol for UI builders'."

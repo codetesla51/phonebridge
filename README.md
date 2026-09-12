@@ -1,4 +1,4 @@
-# phonelink
+# phonebridge
 
 PC to Android relay over adb: push files and clipboard text to the phone,
 pull files back, read battery, ring the phone, and watch notifications —
@@ -10,7 +10,7 @@ build on top.
 
 ```bash
 ./init.sh        # deps, pairing, config, relay APK, smoke test
-phonelink --help # all commands
+phonebridge --help # all commands
 ```
 
 `init.sh` is idempotent — re-run it whenever the phone's address changes.
@@ -38,7 +38,7 @@ All commands print JSON to stdout. Errors go to stderr with a nonzero exit.
 | `notifs` | current notification records `[{key, label, title, sender, pkg}]` |
 | `notifs-watch [--interval N]` | new records as JSON lines (first scan is absorbed, not emitted) |
 
-Config lives at `~/.config/phonelink/config.ini`: remembered device,
+Config lives at `~/.config/phonebridge/config.ini`: remembered device,
 directories, `[display]` model-substring aliases, and the `[notify]`
 pkg-substring allowlist for the notification watcher.
 
@@ -48,7 +48,7 @@ One-shot state (`devices`, `battery`, `ls`, `notifs`, `inbox-sync`) is
 plain request/response JSON. Live streams (`inbox-watch`, `notifs-watch`)
 print one JSON object per line — tail the process and parse lines. `clip`
 takes text on stdin, so clipboard managers stay compositor-specific on
-your side (`wl-paste | phonelink clip`, `xclip -o | phonelink clip`).
+your side (`wl-paste | phonebridge clip`, `xclip -o | phonebridge clip`).
 
 `clients/` holds reference integrations (quickshell).
 
@@ -57,10 +57,10 @@ your side (`wl-paste | phonelink clip`, `xclip -o | phonelink clip`).
 `android-app/` builds the tiny relay APK (no Gradle: javac, d8, aapt2,
 zipalign, apksigner — see its README). Two activities:
 
-- **PhoneRelayActivity** — invisible flash target for `clip`: sets the
+- **PhoneBridgeActivity** — invisible flash target for `clip`: sets the
   clipboard from an invisible window, writes `ack.txt`.
 - **ShareRelayActivity** — share-sheet target (`text/plain` + `*/*`) that
-  stores shared items in `/sdcard/PhoneLink/`, which `inbox-sync`
+  stores shared items in `/sdcard/PhoneBridge/`, which `inbox-sync`
   picks up. This is the robust phone-to-PC channel.
 
 ## Verified quirks

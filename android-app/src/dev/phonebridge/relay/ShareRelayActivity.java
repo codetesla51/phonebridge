@@ -1,4 +1,4 @@
-package dev.phonelink.relay;
+package dev.phonebridge.relay;
 
 import android.app.Activity;
 import android.content.ContentResolver;
@@ -18,13 +18,13 @@ import java.io.OutputStream;
 
 /**
  * Share-sheet target. Anything shared from a phone app lands in
- * /sdcard/PhoneLink/ via direct file write (needs MANAGE_EXTERNAL_STORAGE —
- * granted once, see init.sh), where the PhoneLink backend picks it up over
+ * /sdcard/PhoneBridge/ via direct file write (needs MANAGE_EXTERNAL_STORAGE —
+ * granted once, see init.sh), where the PhoneBridge backend picks it up over
  * adb. A visible top-level folder, not buried in Download.
  */
 public class ShareRelayActivity extends Activity {
     static final String TAG = "RELAY";
-    static final File INBOX = new File(Environment.getExternalStorageDirectory(), "PhoneLink");
+    static final File INBOX = new File(Environment.getExternalStorageDirectory(), "PhoneBridge");
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -40,14 +40,14 @@ public class ShareRelayActivity extends Activity {
 
     private void handleSend(Intent i) throws Exception {
         if (!Environment.isExternalStorageManager())
-            throw new SecurityException("allow 'All files access' for PhoneRelay (Settings, once)");
+            throw new SecurityException("allow 'All files access' for PhoneBridge (Settings, once)");
         if (!INBOX.isDirectory() && !INBOX.mkdirs())
             throw new java.io.IOException("cannot create " + INBOX);
         ContentResolver cr = getContentResolver();
         Uri stream = i.getParcelableExtra(Intent.EXTRA_STREAM);
         String ts = String.valueOf(System.currentTimeMillis());
         if (stream != null) {
-            String name = "phonelink-" + ts + "-" + fileNameOf(cr, stream);
+            String name = "phonebridge-" + ts + "-" + fileNameOf(cr, stream);
             try (InputStream in = cr.openInputStream(stream);
                  OutputStream os = new FileOutputStream(new File(INBOX, name))) {
                 byte[] buf = new byte[65536];
@@ -55,7 +55,7 @@ public class ShareRelayActivity extends Activity {
                 while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
             }
             Log.d(TAG, "file share landed: " + name);
-            Toast.makeText(this, "Saved to PhoneLink/", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Saved to PhoneBridge/", Toast.LENGTH_LONG).show();
         } else {
             String subj = i.getStringExtra(Intent.EXTRA_SUBJECT);
             String text = i.getStringExtra(Intent.EXTRA_TEXT);
@@ -63,12 +63,12 @@ public class ShareRelayActivity extends Activity {
             if (text != null) body += text;
             if (subj != null) body = body + (body.length() > 0 ? "\n\n" : "") + subj;
             if (body.trim().length() == 0) body = "(empty share)";
-            String name = "phonelink-" + ts + ".txt";
+            String name = "phonebridge-" + ts + ".txt";
             try (OutputStream os = new FileOutputStream(new File(INBOX, name))) {
                 os.write(body.getBytes("UTF-8"));
             }
             Log.d(TAG, "text share landed: " + body.length() + " chars");
-            Toast.makeText(this, "Saved to PhoneLink/", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Saved to PhoneBridge/", Toast.LENGTH_LONG).show();
         }
     }
 

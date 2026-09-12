@@ -1,4 +1,4 @@
-package dev.phonelink.relay;
+package dev.phonebridge.relay;
 
 import android.app.Activity;
 import android.content.ClipData;
@@ -14,7 +14,7 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Flash-launch clipboard relay. PhoneLink spawns it via
+ * Flash-launch clipboard relay. PhoneBridge spawns it via
  * `adb shell am start` with `--es mode read|write`, it does its thing on a
  * transparent invisible window, writes the result into its own external files
  * dir (adb can read/write that path), and finishes.
@@ -23,7 +23,7 @@ import java.nio.charset.StandardCharsets;
  * reads return empty inside onResume but succeed once the window settles,
  * hence the delayed read below.
  */
-public class PhoneRelayActivity extends Activity {
+public class PhoneBridgeActivity extends Activity {
     // resolved via API — raw /sdcard paths are FUSE-blocked on this ROM even
     // for the app's own dir; getExternalFilesDir always resolves correctly
     static String dirPath;
@@ -41,7 +41,7 @@ public class PhoneRelayActivity extends Activity {
         super.onResume();
         try {
             File dir = getExternalFilesDir(null);
-            dirPath = dir != null ? dir.getAbsolutePath() : "/sdcard/Android/data/dev.phonelink.relay/files";
+            dirPath = dir != null ? dir.getAbsolutePath() : "/sdcard/Android/data/dev.phonebridge.relay/files";
             new File(dirPath).mkdirs();
             Intent i = getIntent();
             String mode = i.getStringExtra("mode");
@@ -73,7 +73,7 @@ public class PhoneRelayActivity extends Activity {
             return;
         }
         ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        cm.setPrimaryClip(ClipData.newPlainText("PhoneRelay", text));
+        cm.setPrimaryClip(ClipData.newPlainText("PhoneBridge", text));
         save("ack.txt", "OK");
         new File(dirPath, "in.txt").delete();
     }

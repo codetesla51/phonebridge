@@ -1,7 +1,7 @@
 #!/bin/bash
-# Build the PhoneRelay APK without Gradle: javac -> d8 -> aapt2 link ->
+# Build the PhoneBridge APK without Gradle: javac -> d8 -> aapt2 link ->
 # append classes.dex -> zipalign -> apksigner. Needs JDK 17 (mise: java@17)
-# and ~/Android/Sdk (build-tools + platforms/android-34). Output: out/phonerelay.apk
+# and ~/Android/Sdk (build-tools + platforms/android-34). Output: out/phonebridge.apk
 set -euo pipefail
 cd "$(dirname "$0")"
 SDK="$HOME/Android/Sdk"
@@ -29,10 +29,10 @@ echo "zipalign OK"
 
 if [ ! -f keystore.jks ]; then
   keytool -genkeypair -keystore keystore.jks -alias relay -keyalg RSA -keysize 2048 \
-    -validity 10000 -storepass android -keypass android -dname "CN=PhoneRelay" >/dev/null 2>&1
+    -validity 10000 -storepass android -keypass android -dname "CN=PhoneBridge" >/dev/null 2>&1
   echo "keystore generated (first run)"
 fi
 "$BT/apksigner" sign --ks keystore.jks --ks-pass pass:android --key-pass pass:android \
-  --out out/phonerelay.apk out/base.aligned.apk
-echo "signed: out/phonerelay.apk"
-"$BT/apksigner" verify out/phonerelay.apk && echo "verify OK"
+  --out out/phonebridge.apk out/base.aligned.apk
+echo "signed: out/phonebridge.apk"
+"$BT/apksigner" verify out/phonebridge.apk && echo "verify OK"

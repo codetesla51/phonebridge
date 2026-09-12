@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""phonelink — backend daemon/CLI for PC<->Android file + clipboard relay.
+"""phonebridge — backend daemon/CLI for PC<->Android file + clipboard relay.
 
 Every phone interaction here is plain adb + shell; no desktop toolkit
 required. Any UI (quickshell, waybar, rofi, a shell script) can build on
@@ -21,7 +21,7 @@ Subcommands (all print JSON to stdout; errors go to stderr, exit != 0):
   notifs                       one-shot notification records
   notifs-watch [--interval N]  new notification records as JSON lines
 
-Config: ~/.config/phonelink/config.ini (written by init.sh).
+Config: ~/.config/phonebridge/config.ini (written by init.sh).
   [phone]  device, remote_dir, inbox_dir, downloads
   [display] alias_<n> = <model substring> = <label>   (friendly names)
   [notify] app_<n> = <pkg substring> = <label>        (watch allowlist)
@@ -39,9 +39,9 @@ import subprocess
 import sys
 import time
 
-APP_PKG = "dev.phonelink.relay"
-CONFIG = os.path.expanduser("~/.config/phonelink/config.ini")
-INBOX_DEFAULT = "/sdcard/PhoneLink"
+APP_PKG = "dev.phonebridge.relay"
+CONFIG = os.path.expanduser("~/.config/phonebridge/config.ini")
+INBOX_DEFAULT = "/sdcard/PhoneBridge"
 
 
 def inbox_dir(c):
@@ -118,7 +118,7 @@ def emit(obj):
 
 
 def fail(msg, code=1):
-    print(f"phonelink: {msg}", file=sys.stderr)
+    print(f"phonebridge: {msg}", file=sys.stderr)
     sys.exit(code)
 
 
@@ -168,14 +168,14 @@ def cmd_battery(c, args):
 # ── clipboard push (PC -> phone) ─────────────────────────────────────────
 def cmd_clip(c, args):
     import argparse
-    p = argparse.ArgumentParser(prog="phonelink clip")
+    p = argparse.ArgumentParser(prog="phonebridge clip")
     p.add_argument("--text", default=None)
     p.add_argument("--file", default=None)
     ns = p.parse_args(args)
     dev = resolve_device(c)
     if not dev:
         fail("no device")
-    clip_file = os.path.expanduser("~/.cache/phonelink-clipboard.txt")
+    clip_file = os.path.expanduser("~/.cache/phonebridge-clipboard.txt")
     if ns.text is not None:
         data = ns.text.encode()
     elif ns.file:
@@ -195,7 +195,7 @@ def cmd_clip(c, args):
     ok = (
         adb(dev, "push", clip_file, f"{rdir}/in.txt").returncode == 0
         and adb(dev, "shell", "am", "start", "-n",
-                f"{APP_PKG}/.PhoneRelayActivity",
+                f"{APP_PKG}/.PhoneBridgeActivity",
                 "--es", "mode", "write",
                 "--es", "textfile", f"{rdir}/in.txt").returncode == 0
     )
@@ -209,12 +209,13 @@ def cmd_clip(c, args):
     else:
         emit({"status": "fail"})
         sys.exit(1)
+        sys.exit(1)
 
 
 # ── push / pull / ls / shot / scan ───────────────────────────────────────
 def cmd_push(c, args):
     if not args:
-        fail("usage: phonelink push <local-file> [remote-dir]", 2)
+        fail("usage: phonebridge push <local-file> [remote-dir]", 2)
     dev = resolve_device(c)
     if not dev:
         fail("no device")
@@ -232,7 +233,7 @@ def cmd_push(c, args):
 
 def cmd_pull(c, args):
     import argparse
-    p = argparse.ArgumentParser(prog="phonelink pull")
+    p = argparse.ArgumentParser(prog="phonebridge pull")
     p.add_argument("name")
     p.add_argument("--dir", default=None)
     p.add_argument("--dest", default=None)
@@ -241,7 +242,7 @@ def cmd_pull(c, args):
     if not dev:
         fail("no device")
     rdir = ns.dir or cfg_get(c, "phone", "remote_dir", "/sdcard/Download")
-    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/Downloads"))
+    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/PhoneBridge"))
     os.makedirs(dest, exist_ok=True)
     r = adb(dev, "pull", f"{rdir}/{ns.name}", dest + "/")
     # NOTE: adb prints "1 file pulled" for files but "N files pulled" for
@@ -269,15 +270,15 @@ def cmd_ls(c, args):
 
 def cmd_shot(c, args):
     import argparse
-    p = argparse.ArgumentParser(prog="phonelink shot")
+    p = argparse.ArgumentParser(prog="phonebridge shot")
     p.add_argument("--dest", default=None)
     ns = p.parse_args(args)
     dev = resolve_device(c)
     if not dev:
         fail("no device")
-    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "shots", "~/Pictures/PhoneLink"))
+    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "shots", "~/Pictures/PhoneBridge"))
     os.makedirs(dest, exist_ok=True)
-    name = "phonelink-" + time.strftime("%Y%m%d-%H%M%S") + ".png"
+    name = "phonebridge-" + time.strftime("%Y%m%d-%H%M%S") + ".png"
     path = dest + "/" + name
     with open(path, "wb") as f:
         r = subprocess.run(["adb", "-s", dev, "exec-out", "screencap", "-p"],
@@ -332,13 +333,13 @@ def inbox_list(dev, inbox):
 
 def cmd_inbox_sync(c, args):
     import argparse
-    p = argparse.ArgumentParser(prog="phonelink inbox-sync")
+    p = argparse.ArgumentParser(prog="phonebridge inbox-sync")
     p.add_argument("--dest", default=None)
     ns = p.parse_args(args)
     dev = resolve_device(c)
     if not dev:
         fail("no device")
-    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/Downloads"))
+    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/PhoneBridge"))
     os.makedirs(dest, exist_ok=True)
     inbox = inbox_dir(c)
     pulled, skipped = [], []
@@ -360,14 +361,14 @@ def cmd_inbox_sync(c, args):
 
 def cmd_inbox_watch(c, args):
     import argparse
-    p = argparse.ArgumentParser(prog="phonelink inbox-watch")
+    p = argparse.ArgumentParser(prog="phonebridge inbox-watch")
     p.add_argument("--interval", type=int, default=5)
     p.add_argument("--dest", default=None)
     ns = p.parse_args(args)
     dev = resolve_device(c)
     if not dev:
         fail("no device")
-    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/Downloads"))
+    dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/PhoneBridge"))
     os.makedirs(dest, exist_ok=True)
     inbox = inbox_dir(c)
     try:
@@ -449,7 +450,7 @@ def cmd_notifs(c, _args):
 
 def cmd_notifs_watch(c, args):
     import argparse
-    p = argparse.ArgumentParser(prog="phonelink notifs-watch")
+    p = argparse.ArgumentParser(prog="phonebridge notifs-watch")
     p.add_argument("--interval", type=int, default=4)
     ns = p.parse_args(args)
     dev = resolve_device(c)
@@ -502,7 +503,7 @@ def main():
         sys.exit(0 if len(sys.argv) > 1 else 2)
     cmd = sys.argv[1]
     if cmd not in COMMANDS:
-        fail(f"unknown command '{cmd}' (try: phonelink --help)", 2)
+        fail(f"unknown command '{cmd}' (try: phonebridge --help)", 2)
     c = load_config()
     COMMANDS[cmd](c, sys.argv[2:])
 

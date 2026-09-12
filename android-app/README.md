@@ -1,9 +1,9 @@
-# PhoneRelay — tiny Android relay for PhoneLink
+# PhoneBridge — tiny Android relay for PhoneLink
 
 Two activities, one APK, no Gradle.
 
-- **PhoneRelayActivity** — invisible flash-launch activity driven by the
-  PhoneLink module over `adb shell am start`:
+- **PhoneBridgeActivity** — invisible flash-launch activity driven by the
+  PhoneBridge module over `adb shell am start`:
   - `--es mode write --es text "..."` or `--es mode write --es textfile <path>`:
     sets the phone clipboard from the invisible window, writes
     `files/ack.txt` (`OK`/`EMPTY`).
@@ -11,7 +11,7 @@ Two activities, one APK, no Gradle.
     `files/clip.txt`. **Dead on this ROM** (itel A663LC): foreign clips
     always read empty even with READ_CLIPBOARD appop granted.
 - **ShareRelayActivity** — ACTION_SEND target (`text/plain` + `*/*`), stores
-  shared text/files into `/sdcard/PhoneLink/` via direct file write
+  shared text/files into `/sdcard/PhoneBridge/` via direct file write
   (needs MANAGE_EXTERNAL_STORAGE, granted once by init.sh). A visible
   top-level folder, not buried in Download.
 
