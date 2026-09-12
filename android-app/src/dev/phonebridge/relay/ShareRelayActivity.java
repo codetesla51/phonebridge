@@ -31,11 +31,24 @@ public class ShareRelayActivity extends Activity {
         try {
             Intent i = getIntent();
             if (Intent.ACTION_SEND.equals(i.getAction())) handleSend(i);
+            else if (Intent.ACTION_SEND_MULTIPLE.equals(i.getAction())) handleSend(i);
+            buzz();
         } catch (Exception e) {
             Log.e(TAG, "share failed", e);
             Toast.makeText(this, "Share failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
         finish();
+    }
+
+    // tactile confirmation: this ROM swallows our toasts, a buzz always lands
+    private void buzz() {
+        try {
+            android.os.Vibrator v = (android.os.Vibrator) getSystemService(VIBRATOR_SERVICE);
+            if (v != null && v.hasVibrator())
+                v.vibrate(android.os.VibrationEffect.createOneShot(120, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+        } catch (Exception e) {
+            Log.e(TAG, "buzz failed", e);
+        }
     }
 
     private void handleSend(Intent i) throws Exception {
