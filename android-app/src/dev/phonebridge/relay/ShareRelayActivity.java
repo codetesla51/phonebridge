@@ -45,8 +45,17 @@ public class ShareRelayActivity extends Activity {
             throw new java.io.IOException("cannot create " + INBOX);
         ContentResolver cr = getContentResolver();
         String ts = String.valueOf(System.currentTimeMillis());
-        // multi-select shares carry a stream list; singles carry one stream
+        // multi-select shares carry a stream list; singles carry one stream.
+        // some file managers attach streams via ClipData instead of the extra.
         java.util.ArrayList<Uri> streams = i.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+        if ((streams == null || streams.size() == 0) && i.getClipData() != null) {
+            streams = new java.util.ArrayList<Uri>();
+            android.content.ClipData cd = i.getClipData();
+            for (int k = 0; k < cd.getItemCount(); k++) {
+                Uri u = cd.getItemAt(k).getUri();
+                if (u != null) streams.add(u);
+            }
+        }
         if (streams != null && streams.size() > 0) {
             int k = 0;
             for (Uri stream : streams) {
@@ -58,6 +67,8 @@ public class ShareRelayActivity extends Activity {
             return;
         }
         Uri stream = i.getParcelableExtra(Intent.EXTRA_STREAM);
+        if (stream == null && i.getClipData() != null && i.getClipData().getItemCount() > 0)
+            stream = i.getClipData().getItemAt(0).getUri();
         if (stream != null) {
             String name = "phonebridge-" + ts + "-" + fileNameOf(cr, stream);
             saveStream(cr, stream, name, i.getType() != null ? i.getType() : "*/*");
