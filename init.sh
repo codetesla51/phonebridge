@@ -45,6 +45,7 @@ if [ ! -f "$CONF" ]; then
         echo "device = $dev"
         echo "target = $target"
         echo "remote_dir = /sdcard/Download"
+        echo "inbox_dir = /sdcard/PhoneLink"
         echo "downloads = ~/Downloads"
         echo "shots = ~/Pictures/PhoneLink"
         echo ""
@@ -86,6 +87,18 @@ else
     adb -s "$dev" install -r "$APK" | grep -q Success || die "adb install failed"
     say "relay app installed"
     sleep 3  # fresh installs need a beat before the first flash answers
+fi
+# share-sheet inbox (/sdcard/PhoneLink) needs all-files access; needs the
+# permission declared (it is) — if the ROM refuses the adb grant, flip it
+# once in Settings > Special app access > All files access > PhoneRelay
+if ! adb -s "$dev" shell appops get "$PKG" MANAGE_EXTERNAL_STORAGE 2>/dev/null | grep -q ": allow"; then
+    adb -s "$dev" shell appops set "$PKG" MANAGE_EXTERNAL_STORAGE allow >/dev/null 2>&1
+fi
+if adb -s "$dev" shell appops get "$PKG" MANAGE_EXTERNAL_STORAGE 2>/dev/null | grep -q ": allow"; then
+    say "all-files access: granted"
+else
+    say "all-files access: NOT granted — sharing will fail until you allow it:"
+    say "  Settings > Special app access > All files access > PhoneRelay > Allow"
 fi
 
 # ── smoke test ──────────────────────────────────────────────────────────

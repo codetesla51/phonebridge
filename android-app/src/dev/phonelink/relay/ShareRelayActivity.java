@@ -2,7 +2,6 @@ package dev.phonelink.relay;
 
 import android.app.Activity;
 import android.content.ContentResolver;
-import android.content.ContentValues;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
@@ -12,17 +11,20 @@ import android.provider.MediaStore;
 import android.util.Log;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
  * Share-sheet target. Anything shared from a phone app lands in
- * Download/PhoneLinkInbox/ via MediaStore (no storage permission needed on
- * API 29+), where the PhoneLink pull browser can pick it up over adb.
+ * /sdcard/PhoneLink/ via direct file write (needs MANAGE_EXTERNAL_STORAGE —
+ * granted once, see init.sh), where the PhoneLink backend picks it up over
+ * adb. A visible top-level folder, not buried in Download.
  */
 public class ShareRelayActivity extends Activity {
     static final String TAG = "RELAY";
-    static final String INBOX = Environment.DIRECTORY_DOWNLOADS + "/PhoneLinkInbox";
+    static final File INBOX = new File(Environment.getExternalStorageDirectory(), "PhoneLink");
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -37,24 +39,23 @@ public class ShareRelayActivity extends Activity {
     }
 
     private void handleSend(Intent i) throws Exception {
+        if (!Environment.isExternalStorageManager())
+            throw new SecurityException("allow 'All files access' for PhoneRelay (Settings, once)");
+        if (!INBOX.isDirectory() && !INBOX.mkdirs())
+            throw new java.io.IOException("cannot create " + INBOX);
         ContentResolver cr = getContentResolver();
         Uri stream = i.getParcelableExtra(Intent.EXTRA_STREAM);
         String ts = String.valueOf(System.currentTimeMillis());
         if (stream != null) {
             String name = "phonelink-" + ts + "-" + fileNameOf(cr, stream);
-            ContentValues cv = new ContentValues();
-            cv.put(MediaStore.Downloads.DISPLAY_NAME, name);
-            cv.put(MediaStore.Downloads.MIME_TYPE, i.getType() != null ? i.getType() : "*/*");
-            cv.put(MediaStore.Downloads.RELATIVE_PATH, INBOX);
-            Uri out = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
             try (InputStream in = cr.openInputStream(stream);
-                 OutputStream os = cr.openOutputStream(out)) {
+                 OutputStream os = new FileOutputStream(new File(INBOX, name))) {
                 byte[] buf = new byte[65536];
                 int n;
                 while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
             }
             Log.d(TAG, "file share landed: " + name);
-            Toast.makeText(this, "Saved to Download/PhoneLinkInbox/", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Saved to PhoneLink/", Toast.LENGTH_LONG).show();
         } else {
             String subj = i.getStringExtra(Intent.EXTRA_SUBJECT);
             String text = i.getStringExtra(Intent.EXTRA_TEXT);
@@ -62,16 +63,12 @@ public class ShareRelayActivity extends Activity {
             if (text != null) body += text;
             if (subj != null) body = body + (body.length() > 0 ? "\n\n" : "") + subj;
             if (body.trim().length() == 0) body = "(empty share)";
-            ContentValues cv = new ContentValues();
-            cv.put(MediaStore.Downloads.DISPLAY_NAME, "phonelink-" + ts + ".txt");
-            cv.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
-            cv.put(MediaStore.Downloads.RELATIVE_PATH, INBOX);
-            Uri out = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
-            try (OutputStream os = cr.openOutputStream(out)) {
+            String name = "phonelink-" + ts + ".txt";
+            try (OutputStream os = new FileOutputStream(new File(INBOX, name))) {
                 os.write(body.getBytes("UTF-8"));
             }
             Log.d(TAG, "text share landed: " + body.length() + " chars");
-            Toast.makeText(this, "Saved to Download/PhoneLinkInbox/", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Saved to PhoneLink/", Toast.LENGTH_LONG).show();
         }
     }
 

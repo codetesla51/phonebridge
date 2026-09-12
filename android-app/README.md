@@ -11,9 +11,9 @@ Two activities, one APK, no Gradle.
     `files/clip.txt`. **Dead on this ROM** (itel A663LC): foreign clips
     always read empty even with READ_CLIPBOARD appop granted.
 - **ShareRelayActivity** — ACTION_SEND target (`text/plain` + `*/*`), stores
-  shared text/files into `Download/PhoneLinkInbox/` via MediaStore (no
-  storage permission needed on API 29+). The PhoneLink pull browser sees
-  that folder directly.
+  shared text/files into `/sdcard/PhoneLink/` via direct file write
+  (needs MANAGE_EXTERNAL_STORAGE, granted once by init.sh). A visible
+  top-level folder, not buried in Download.
 
 ## Verified behavior on itel A663LC (Android 13, 2026-09-12)
 

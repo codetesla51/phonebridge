@@ -41,7 +41,11 @@ import time
 
 APP_PKG = "dev.phonelink.relay"
 CONFIG = os.path.expanduser("~/.config/phonelink/config.ini")
-INBOX_DIR = "/sdcard/Download/PhoneLinkInbox"
+INBOX_DEFAULT = "/sdcard/PhoneLink"
+
+
+def inbox_dir(c):
+    return cfg_get(c, "phone", "inbox_dir", INBOX_DEFAULT)
 CLIP_MAX = 100000
 INBOX_MAX = 250 * 1024 * 1024
 
@@ -240,7 +244,9 @@ def cmd_pull(c, args):
     dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/Downloads"))
     os.makedirs(dest, exist_ok=True)
     r = adb(dev, "pull", f"{rdir}/{ns.name}", dest + "/")
-    if r.returncode != 0 or "1 file pulled" not in (r.stdout + r.stderr):
+    # NOTE: adb prints "1 file pulled" for files but "N files pulled" for
+    # directories — returncode is the only reliable success signal.
+    if r.returncode != 0:
         fail((r.stderr.strip().split("\n") or ["pull failed"])[-1][:120])
     emit({"status": "ok", "name": ns.name, "path": dest + "/" + ns.name})
 
@@ -306,10 +312,10 @@ def cmd_wake(c, args):
 
 
 # ── inbox: share-sheet files phone -> PC ─────────────────────────────────
-def inbox_list(dev):
+def inbox_list(dev, inbox):
     """[(size, name)] for files in the share-sheet inbox dir."""
     r = adb(dev, "shell",
-            "for f in " + INBOX_DIR + "/*; do [ -f \"$f\" ] || continue; "
+            "for f in " + inbox + "/*; do [ -f \"$f\" ] || continue; "
             "n=${f##*/}; "
             "printf \"%s\\t%s\\n\" \"$(stat -c %s \"$f\")\" \"$n\"; done")
     out = []
@@ -334,8 +340,9 @@ def cmd_inbox_sync(c, args):
         fail("no device")
     dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/Downloads"))
     os.makedirs(dest, exist_ok=True)
+    inbox = inbox_dir(c)
     pulled, skipped = [], []
-    for size, name in inbox_list(dev):
+    for size, name in inbox_list(dev, inbox):
         if size > INBOX_MAX:
             skipped.append({"name": name, "reason": "too-big", "bytes": size})
             continue
@@ -343,8 +350,8 @@ def cmd_inbox_sync(c, args):
         if os.path.isfile(local) and os.path.getsize(local) == size:
             skipped.append({"name": name, "reason": "already-here"})
             continue
-        r = adb(dev, "pull", f"{INBOX_DIR}/{name}", dest + "/")
-        if r.returncode == 0 and "1 file pulled" in (r.stdout + r.stderr):
+        r = adb(dev, "pull", f"{inbox}/{name}", dest + "/")
+        if r.returncode == 0:
             pulled.append({"name": name, "path": local, "bytes": size})
         else:
             skipped.append({"name": name, "reason": "pull-failed"})
@@ -362,16 +369,17 @@ def cmd_inbox_watch(c, args):
         fail("no device")
     dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/Downloads"))
     os.makedirs(dest, exist_ok=True)
+    inbox = inbox_dir(c)
     try:
         while True:
-            for size, name in inbox_list(dev):
+            for size, name in inbox_list(dev, inbox):
                 if size > INBOX_MAX:
                     continue
                 local = dest + "/" + name
                 if os.path.isfile(local) and os.path.getsize(local) == size:
                     continue
-                r = adb(dev, "pull", f"{INBOX_DIR}/{name}", dest + "/")
-                if r.returncode == 0 and "1 file pulled" in (r.stdout + r.stderr):
+                r = adb(dev, "pull", f"{inbox}/{name}", dest + "/")
+                if r.returncode == 0:
                     emit({"event": "inbox", "name": name, "path": local, "bytes": size})
                     sys.stdout.flush()
             time.sleep(ns.interval)

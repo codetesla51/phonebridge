@@ -60,7 +60,7 @@ zipalign, apksigner — see its README). Two activities:
 - **PhoneRelayActivity** — invisible flash target for `clip`: sets the
   clipboard from an invisible window, writes `ack.txt`.
 - **ShareRelayActivity** — share-sheet target (`text/plain` + `*/*`) that
-  stores shared items in `Download/PhoneLinkInbox/`, which `inbox-sync`
+  stores shared items in `/sdcard/PhoneLink/`, which `inbox-sync`
   picks up. This is the robust phone-to-PC channel.
 
 ## Verified quirks
