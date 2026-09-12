@@ -64,6 +64,22 @@ your side (`wl-paste | phonebridge clip`, `xclip -o | phonebridge clip`).
 
 `clients/` holds reference integrations (quickshell).
 
+## Notification forwarding
+
+`notifs` dumps the current shade as records; `notifs-watch` prints new
+ones as JSON lines (`{key, label, title, sender, pkg}`). Only apps on the
+`[notify]` allowlist (config: package substring = label) are reported.
+
+- Works with phone DND on or off — DND silences the phone, it does not
+  remove entries from the shade.
+- WhatsApp group-chat titles embed the author (`"Group (149 messages):
+  ~ Jay"`) — the sender is extracted, 1:1 titles are the contact
+  themselves. Title-only, never message bodies.
+- The first scan after connecting is absorbed, not emitted, so old
+  notifications don't re-ping. Keys are capped (200) to bound memory.
+- Bandwidth-conscious: the ~1 MB dump is truncated phone-side to record
+  headers + titles only (~5 KB/s at the default 4 s poll).
+
 ## Android app
 
 `android-app/` builds the tiny relay APK (no Gradle: javac, d8, aapt2,
