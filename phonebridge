@@ -34,6 +34,7 @@ clipboard reads are blocked, relay-set clips are reaped within seconds
 import configparser
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -390,6 +391,30 @@ def cmd_inbox_watch(c, args):
 
 
 # ── notifications ────────────────────────────────────────────────────────
+def _string_field(line, name):
+    # paren-aware String (...) extraction — titles can contain parens
+    # ("Family (149 messages): ~ Jay"); a naive [^)]* would cut them.
+    m = re.search(re.escape(name) + r"=String \(", line)
+    if not m:
+        return None
+    i, depth = m.end(), 1
+    while i < len(line) and depth:
+        if line[i] == "(":
+            depth += 1
+        elif line[i] == ")":
+            depth -= 1
+        i += 1
+    return line[m.end():i - 1]
+
+
+def _looks_like_name(t):
+    # a sender is a short name (<=3 words, name chars), never a sentence:
+    # message previews after a colon ("Jay: hey are you...") must fail.
+    t = t.strip().lstrip("~").strip()
+    return bool(t) and len(t) <= 32 and bool(
+        re.fullmatch(r"[^\W\d_][\w.'’\-]{0,29}(?: [^\W\d_][\w.'’\-]{0,29}){0,2}", t))
+
+
 def parse_notifs(dump, allow):
     import re
     fresh, cur = [], None
@@ -408,7 +433,7 @@ def parse_notifs(dump, allow):
                 if sub in h.group(1):
                     m = re.search(r"key=([^:\s]+)", line)
                     cur = {"key": m.group(1) if m else None, "title": "",
-                           "label": label, "pkg": h.group(1), "sender": ""}
+                           "label": label, "pkg": h.group(1), "sender": "", "body": ""}
                     break
             continue
         if not cur:
@@ -418,27 +443,49 @@ def parse_notifs(dump, allow):
             if m:
                 cur["key"] = m.group(1)
         if not cur["title"]:
-            t = re.search(r"android\.title=String \(([^)]*)\)", line)
-            if t:
-                cur["title"] = t.group(1)
+            t = _string_field(line, "android.title")
+            if t is not None:
+                cur["title"] = t
+        if not cur.get("body"):
+            tb = _string_field(line, "android.text")
+            if tb is not None:
+                cur["body"] = tb
+            else:
+                tb = _string_field(line, "android.bigText")
+                if tb is not None:
+                    cur["body"] = tb
     if cur is not None:
         flush()
-    # WhatsApp embeds the author in group-chat titles:
-    # "Group (149 messages): ~ Jay"; 1:1 titles are the contact themselves
+    # Extract the author (WHO, not WHAT) for every app, and scrub the title
+    # so only a sender name ever reaches the PC — never message content:
+    #   WhatsApp: "Group (149 messages): ~ Jay" -> who "Jay"
+    #   Telegram: "GroupName: SenderName"        -> who "SenderName"
+    #   1:1 hits: "Jay" (title is the contact)   -> who "Jay"
+    # Count-only titles ("149 messages") carry no author either way.
+    # Anything else might be a message preview -> drop it, keep who only.
     for rec in fresh:
-        if rec["label"] == "WhatsApp" and rec["title"]:
-            sm = re.search(r"[:：]\s*~?\s*(.+)$", rec["title"])
-            if sm:
-                tail = sm.group(1).strip().rstrip(")").strip()
-                if tail and not tail[0].isdigit() and len(tail) <= 30:
-                    rec["sender"] = tail
+        t = (rec.get("title") or "").strip()
+        if not t:
+            continue
+        sm = re.search(r"[:：]\s*~?\s*([^:：\n]+?)\s*$", t)
+        if sm and _looks_like_name(sm.group(1)):
+            rec["sender"] = sm.group(1).strip().lstrip("~").strip()
+            rec["title"] = ""
+            continue
+        if re.search(r"\d+\s*(messages?|new|unread)", t.lower()):
+            rec["title"] = ""
+            continue
+        bare = re.sub(r"\s*\([^)]*\)\s*$", "", t)  # "Mom (Mobile)" -> "Mom"
+        if _looks_like_name(bare):
+            rec["sender"] = bare.strip().lstrip("~").strip()
+        rec["title"] = ""
     return fresh
 
 
 def notif_dump(dev):
     r = adb(dev, "shell", "dumpsys notification --noredact | "
             "sed 's/ Notification(.*//' | "
-            "grep -E 'NotificationRecord\\(|key=|android.title'")
+            "grep -E 'NotificationRecord\\(|key=|android.title|android.text|android.bigText'")
     return r.stdout
 
 

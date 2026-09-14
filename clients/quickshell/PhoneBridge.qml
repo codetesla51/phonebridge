@@ -48,7 +48,7 @@ FloatingWindow {
     property bool sending: false
 
     // --- pull browser ---
-    property string remoteDir: "/sdcard/Download"
+    property string remoteDir: "/sdcard"
     property var remoteRows: []         // [{name, isDir}]
     property string pullState: ""       // name pulling, "" when idle
     property int pullTotal: 0
@@ -75,9 +75,9 @@ FloatingWindow {
 
     title: "PhoneBridge"
     width: 400
-    height: 520
-    minimumSize: Qt.size(360, 480)
-    maximumSize: Qt.size(460, 620)
+    height: 460
+    minimumSize: Qt.size(360, 400)
+    maximumSize: Qt.size(460, 520)
     color: "transparent"
     visible: root.open
 
@@ -142,9 +142,10 @@ FloatingWindow {
             if (root.seenKeys.indexOf(f.key) !== -1) continue
             root.seenKeys.push(f.key)
             if (root.seenKeys.length > 200) root.seenKeys.shift()
+            var who = f.sender || ("New " + f.label + " notification")
+            var body = f.body ? String(f.body) : (f.sender ? "via " + f.label : "")
             Quickshell.execDetached(["notify-send", "-a", f.label,
-                f.title || "New " + f.label + " notification",
-                f.sender ? "from " + f.sender : ""])
+                who, body])
         }
     }
 
@@ -490,6 +491,7 @@ FloatingWindow {
             root.say("No phone connected — same WiFi as the laptop?")
             return
         }
+        root.say("Sending clipboard…")
         clipReadProc.command = ["sh", "-c",
             "if wl-paste --list-types 2>/dev/null | grep -q image; then echo CLIP_HAS_IMAGE; " +
             "else wl-paste -t text/plain --no-newline > " + root.sq(root.clipFile) + " 2>/dev/null && echo CLIP_HAS_TEXT || echo CLIP_EMPTY; fi"]
@@ -503,6 +505,7 @@ FloatingWindow {
             onStreamFinished: {
                 var t = text.trim()
                 if (t.indexOf("CLIP_HAS_IMAGE") !== -1) {
+                    root.say("Sending image…")
                     var d = new Date()
                     function p2(n) { return (n < 10 ? "0" : "") + n }
                     var ip = "/tmp/clipboard-" + p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds()) + ".png"
