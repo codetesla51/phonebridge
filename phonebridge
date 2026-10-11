@@ -89,16 +89,31 @@ def notify_apps(c):
     return out
 
 
+# Every adb call is bounded: a dead host / wedged server must fail, never
+# hang the caller (the QML panel has no way to interrupt a stuck Process
+# other than its own watchdog). Timeouts surface as returncode 124 so the
+# existing `returncode != 0` / fail() paths handle them like any adb error.
+CONNECT_TIMEOUT = 8    # adb connect to a dead host blocks for minutes
+QUICK_TIMEOUT = 10     # local server queries (devices, resolve)
+DEFAULT_TIMEOUT = 30   # shell one-shots (battery, ls, clip, notifs, ring)
+XFER_TIMEOUT = 300     # push/pull (up to 250 MB over wifi needs minutes)
+
+
 def run(cmd, **kw):
-    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+    kw.setdefault("timeout", DEFAULT_TIMEOUT)
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, **kw)
+    except subprocess.TimeoutExpired:
+        t = kw.get("timeout", DEFAULT_TIMEOUT)
+        return subprocess.CompletedProcess(cmd, 124, "", f"timed out after {t}s")
 
 
-def adb(device, *args):
+def adb(device, *args, **kw):
     cmd = ["adb"]
     if device:
         cmd += ["-s", device]
     cmd += list(args)
-    return run(cmd)
+    return run(cmd, **kw)
 
 
 def resolve_device(c, explicit=""):
@@ -107,7 +122,7 @@ def resolve_device(c, explicit=""):
     dev = cfg_get(c, "phone", "device")
     if dev:
         return dev
-    r = run(["adb", "devices"])
+    r = run(["adb", "devices"], timeout=QUICK_TIMEOUT)
     for line in r.stdout.splitlines()[1:]:
         parts = line.split()
         if len(parts) >= 2 and parts[1] == "device":
@@ -126,7 +141,7 @@ def fail(msg, code=1):
 
 # ── devices ──────────────────────────────────────────────────────────────
 def cmd_devices(c, _args):
-    r = run(["adb", "devices", "-l"])
+    r = run(["adb", "devices", "-l"], timeout=QUICK_TIMEOUT)
     found = []
     als = aliases(c)
     for line in r.stdout.strip().split("\n"):
@@ -147,7 +162,11 @@ def cmd_connect(c, args):
     addr = args[0] if args else cfg_get(c, "phone", "target")
     if not addr:
         fail("no address: pass one or set phone.target in " + CONFIG, 2)
-    r = run(["adb", "connect", addr])
+    # Drop any stale (offline/ghost) entry first: after a phone reboot the
+    # adb server can hold the old address as unreachable, and a bare
+    # `connect` then reports "already connected" to a dead endpoint.
+    run(["adb", "disconnect", addr], timeout=QUICK_TIMEOUT)
+    r = run(["adb", "connect", addr], timeout=CONNECT_TIMEOUT)
     out = r.stdout + r.stderr
     if "connected to" in out or "already connected" in out:
         emit({"status": "ok", "target": addr})
@@ -223,7 +242,7 @@ def cmd_push(c, args):
         fail("no device")
     local = os.path.expanduser(args[0])
     rdir = args[1] if len(args) > 1 else cfg_get(c, "phone", "remote_dir", "/sdcard/Download")
-    r = adb(dev, "push", local, rdir)
+    r = adb(dev, "push", local, rdir, timeout=XFER_TIMEOUT)
     if r.returncode != 0:
         fail((r.stderr.strip().split("\n") or ["push failed"])[-1][:120])
     name = os.path.basename(local)
@@ -246,7 +265,7 @@ def cmd_pull(c, args):
     rdir = ns.dir or cfg_get(c, "phone", "remote_dir", "/sdcard/Download")
     dest = os.path.expanduser(ns.dest or cfg_get(c, "phone", "downloads", "~/PhoneBridge"))
     os.makedirs(dest, exist_ok=True)
-    r = adb(dev, "pull", f"{rdir}/{ns.name}", dest + "/")
+    r = adb(dev, "pull", f"{rdir}/{ns.name}", dest + "/", timeout=XFER_TIMEOUT)
     # NOTE: adb prints "1 file pulled" for files but "N files pulled" for
     # directories — returncode is the only reliable success signal.
     if r.returncode != 0:
@@ -283,8 +302,11 @@ def cmd_shot(c, args):
     name = "phonebridge-" + time.strftime("%Y%m%d-%H%M%S") + ".png"
     path = dest + "/" + name
     with open(path, "wb") as f:
-        r = subprocess.run(["adb", "-s", dev, "exec-out", "screencap", "-p"],
-                           stdout=f, stderr=subprocess.PIPE)
+        try:
+            r = subprocess.run(["adb", "-s", dev, "exec-out", "screencap", "-p"],
+                               stdout=f, stderr=subprocess.PIPE, timeout=DEFAULT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            fail("shot failed — screen on and unlocked?")
     if r.returncode != 0 or os.path.getsize(path) == 0:
         fail("shot failed — screen on and unlocked?")
     emit({"status": "ok", "name": name, "path": path})
@@ -353,7 +375,7 @@ def cmd_inbox_sync(c, args):
         if os.path.isfile(local) and os.path.getsize(local) == size:
             skipped.append({"name": name, "reason": "already-here"})
             continue
-        r = adb(dev, "pull", f"{inbox}/{name}", dest + "/")
+        r = adb(dev, "pull", f"{inbox}/{name}", dest + "/", timeout=XFER_TIMEOUT)
         if r.returncode == 0:
             pulled.append({"name": name, "path": local, "bytes": size})
         else:
@@ -381,7 +403,7 @@ def cmd_inbox_watch(c, args):
                 local = dest + "/" + name
                 if os.path.isfile(local) and os.path.getsize(local) == size:
                     continue
-                r = adb(dev, "pull", f"{inbox}/{name}", dest + "/")
+                r = adb(dev, "pull", f"{inbox}/{name}", dest + "/", timeout=XFER_TIMEOUT)
                 if r.returncode == 0:
                     emit({"event": "inbox", "name": name, "path": local, "bytes": size})
                     sys.stdout.flush()
@@ -424,7 +446,12 @@ def parse_notifs(dump, allow):
             fresh.append(cur)
 
     for line in dump.split("\n"):
-        h = re.search(r"NotificationRecord\([^:]*: pkg=([^\s]+)", line)
+        # Two record formats exist in dumpsys output: the detailed
+        # "NotificationRecord(0x..: pkg=..)" list (with titles), and the
+        # summary "StatusBarNotification(pkg=..)" list (no titles — but a
+        # record with an empty title still pings, which beats silence).
+        # WhatsApp on some ROMs only appears in the summary list.
+        h = re.search(r"(?:NotificationRecord\([^:]*: pkg=|StatusBarNotification\(pkg=)([^\s]+)", line)
         if h:
             if cur is not None:
                 flush()
@@ -433,7 +460,7 @@ def parse_notifs(dump, allow):
                 if sub in h.group(1):
                     m = re.search(r"key=([^:\s]+)", line)
                     cur = {"key": m.group(1) if m else None, "title": "",
-                           "label": label, "pkg": h.group(1), "sender": "", "body": ""}
+                           "label": label, "pkg": h.group(1), "sender": "", "body": "", "group": ""}
                     break
             continue
         if not cur:
@@ -458,14 +485,22 @@ def parse_notifs(dump, allow):
         flush()
     # Extract the author (WHO, not WHAT) for every app, and scrub the title
     # so only a sender name ever reaches the PC — never message content:
-    #   WhatsApp: "Group (149 messages): ~ Jay" -> who "Jay"
+    #   WhatsApp: "Group (149 messages): ~ Jay" -> group "Group", who "Jay"
     #   Telegram: "GroupName: SenderName"        -> who "SenderName"
     #   1:1 hits: "Jay" (title is the contact)   -> who "Jay"
     # Count-only titles ("149 messages") carry no author either way.
     # Anything else might be a message preview -> drop it, keep who only.
+    # NOTE: message BODIES (android.text) are forwarded verbatim — the user
+    # explicitly wants full content on the PC, not sender-only pings.
     for rec in fresh:
         t = (rec.get("title") or "").strip()
         if not t:
+            continue
+        gm = re.search(r"^(.*?)\s*\(\d+\s*messages?\)\s*[:：]\s*~?\s*([^:：\n]+?)\s*$", t)
+        if gm and _looks_like_name(gm.group(2)):
+            rec["group"] = gm.group(1).strip()
+            rec["sender"] = gm.group(2).strip().lstrip("~").strip()
+            rec["title"] = ""
             continue
         sm = re.search(r"[:：]\s*~?\s*([^:：\n]+?)\s*$", t)
         if sm and _looks_like_name(sm.group(1)):
