@@ -492,6 +492,7 @@ def parse_notifs(dump, allow):
     # Anything else might be a message preview -> drop it, keep who only.
     # NOTE: message BODIES (android.text) are forwarded verbatim — the user
     # explicitly wants full content on the PC, not sender-only pings.
+    COUNT_RE = re.compile(r"\d+\s*(messages?|new|unread)")
     for rec in fresh:
         t = (rec.get("title") or "").strip()
         if not t:
@@ -507,12 +508,26 @@ def parse_notifs(dump, allow):
             rec["sender"] = sm.group(1).strip().lstrip("~").strip()
             rec["title"] = ""
             continue
-        if re.search(r"\d+\s*(messages?|new|unread)", t.lower()):
+        if COUNT_RE.search(t.lower()):
             rec["title"] = ""
             continue
         bare = re.sub(r"\s*\([^)]*\)\s*$", "", t)  # "Mom (Mobile)" -> "Mom"
         if _looks_like_name(bare):
             rec["sender"] = bare.strip().lstrip("~").strip()
+        else:
+            # emoji-prefixed contact ("😳John" -> "John"); previews still fail
+            # the validator after stripping, so they can't leak into who
+            bare2 = re.sub(r"^[^\w]+", "", bare).strip()
+            if bare2 != bare and _looks_like_name(bare2):
+                rec["sender"] = bare2
+            else:
+                # last resort: a raw number or odd name beats a nameless ping.
+                # "Jay: hey..." -> "Jay"; count noise stays nameless.
+                head = t.split(":")[0].strip()
+                if head and len(head) <= 32 and not COUNT_RE.search(head.lower()):
+                    rec["sender"] = head.lstrip("~").strip()
+                elif len(t) <= 48 and not COUNT_RE.search(t.lower()):
+                    rec["sender"] = t
         rec["title"] = ""
     return fresh
 
